@@ -10,3 +10,4 @@ AbogadosExpulsados-CA/
   .github/
     workflows/
       update.yml
+const DATA_PATH = "docs/data/entries.json";
