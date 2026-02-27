@@ -1,0 +1,224 @@
+import fs from "fs";
+import crypto from "crypto";
+import * as cheerio from "cheerio";
+
+const SOURCE_URL =
+  "https://www.calbar.ca.gov/legal-professionals/maintaining-compliance/administrative-compliance/attorney-discipline?page=1";
+
+const DATA_PATH = "site/data/entries.json";
+
+// If you add a DeepL key as a GitHub Secret named DEEPL_API_KEY, translations will run.
+// If not, the site will still update (English only).
+const DEEPL_API_KEY = process.env.DEEPL_API_KEY || "";
+
+/**
+ * Utility: read JSON if present, else default.
+ */
+function readJson(path) {
+  if (!fs.existsSync(path)) {
+    return { last_updated: null, entries: [] };
+  }
+  return JSON.parse(fs.readFileSync(path, "utf8"));
+}
+
+function writeJson(path, obj) {
+  fs.mkdirSync(path.split("/").slice(0, -1).join("/"), { recursive: true });
+  fs.writeFileSync(path, JSON.stringify(obj, null, 2) + "\n", "utf8");
+}
+
+function sha16(input) {
+  return crypto.createHash("sha256").update(input).digest("hex").slice(0, 16);
+}
+
+function normalizeWhitespace(s) {
+  return (s || "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Parse dates like "February 21, 2026" into "YYYY-MM-DD"
+ */
+function parseDateToISO(dateStr) {
+  const s = normalizeWhitespace(dateStr);
+  // Try native parse first
+  const d = new Date(s);
+  if (!Number.isNaN(d.getTime())) {
+    const yyyy = d.getUTCFullYear();
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  return null;
+}
+
+/**
+ * Extract entries by scanning text lines around "Effective Date:"
+ * This is intentionally heuristic to avoid brittle CSS selectors.
+ *
+ * Expected pattern in text:
+ *   <summary line>
+ *   Effective Date:
+ *   <date line>
+ *   <bucket line>   (e.g., "San Diego County" or "Out-of-state")
+ */
+function extractEntriesFromHtml(html) {
+  const $ = cheerio.load(html);
+
+  // Pull the main readable text. We prefer main content but fall back to body.
+  const mainText =
+    $("main").text() ||
+    $("#main").text() ||
+    $(".main").text() ||
+    $("body").text();
+
+  const lines = mainText
+    .split("\n")
+    .map((l) => normalizeWhitespace(l))
+    .filter((l) => l.length > 0);
+
+  const entries = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].toLowerCase() === "effective date:" || lines[i].toLowerCase().startsWith("effective date:")) {
+      // Summary is typically immediately before "Effective Date:"
+      const summary = normalizeWhitespace(lines[i - 1] || "");
+      // Date is typically next non-empty line
+      const dateRaw = normalizeWhitespace(lines[i + 1] || "");
+      const dateISO = parseDateToISO(dateRaw);
+
+      // Bucket (county/out-of-state) is typically the next line after the date
+      const bucket = normalizeWhitespace(lines[i + 2] || "");
+
+      // Basic validation: summary should contain a bar number marker or at least be sentence-like
+      if (summary && summary.length >= 20) {
+        const barMatch = summary.match(/\[#(\d+)\]/);
+        const barNumber = barMatch ? barMatch[1] : null;
+
+        const id = sha16(`${barNumber || ""}|${dateISO || dateRaw}|${summary}`);
+
+        entries.push({
+          id,
+          name: extractName(summary),
+          bar_number: barNumber,
+          summary_en: summary,
+          summary_es: null,
+          effective_date: dateISO,
+          effective_date_raw: dateISO ? null : dateRaw,
+          bucket,
+          source_url: SOURCE_URL,
+          scraped_at: new Date().toISOString()
+        });
+      }
+    }
+  }
+
+  // De-dup within a run
+  const seen = new Set();
+  return entries.filter((e) => {
+    if (seen.has(e.id)) return false;
+    seen.add(e.id);
+    return true;
+  });
+}
+
+/**
+ * Try to extract the attorney name from the summary:
+ * "Todd James Hilts [#190711] of San Diego, ..."
+ */
+function extractName(summary) {
+  const s = normalizeWhitespace(summary);
+  const idx = s.indexOf("[#");
+  if (idx > 0) return s.slice(0, idx).trim();
+  return null;
+}
+
+/**
+ * Translate via DeepL (recommended). If DEEPL_API_KEY is missing, return null.
+ */
+async function translateToSpanish(text) {
+  if (!DEEPL_API_KEY) return null;
+  const t = normalizeWhitespace(text);
+  if (!t) return null;
+
+  const params = new URLSearchParams();
+  params.append("auth_key", DEEPL_API_KEY);
+  params.append("text", t);
+  params.append("target_lang", "ES");
+
+  const resp = await fetch("https://api-free.deepl.com/v2/translate", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new Error(`DeepL error ${resp.status}: ${body.slice(0, 200)}`);
+  }
+
+  const data = await resp.json();
+  const out = data?.translations?.[0]?.text;
+  return out ? normalizeWhitespace(out) : null;
+}
+
+async function main() {
+  console.log(`Fetching: ${SOURCE_URL}`);
+  const resp = await fetch(SOURCE_URL, {
+    headers: {
+      // Mildly helpful to avoid naive blocks
+      "User-Agent": "Mozilla/5.0 (compatible; GitHubActionsBot/1.0)"
+    }
+  });
+  if (!resp.ok) throw new Error(`Fetch failed: ${resp.status}`);
+  const html = await resp.text();
+
+  const scraped = extractEntriesFromHtml(html);
+  console.log(`Scraped candidates: ${scraped.length}`);
+
+  const db = readJson(DATA_PATH);
+  const existingById = new Map(db.entries.map((e) => [e.id, e]));
+
+  const newEntries = [];
+  for (const e of scraped) {
+    if (!existingById.has(e.id)) newEntries.push(e);
+  }
+
+  console.log(`New entries: ${newEntries.length}`);
+
+  // Translate only the new ones
+  for (const e of newEntries) {
+    try {
+      e.summary_es = await translateToSpanish(e.summary_en);
+    } catch (err) {
+      console.log(`Translation failed for ${e.id}: ${err.message}`);
+      e.summary_es = null;
+    }
+  }
+
+  // Merge: append new entries, then sort newest effective_date first (fallback to scraped_at)
+  const merged = [...db.entries, ...newEntries].sort((a, b) => {
+    const ad = a.effective_date || "";
+    const bd = b.effective_date || "";
+    if (ad !== bd) return bd.localeCompare(ad);
+    return (b.scraped_at || "").localeCompare(a.scraped_at || "");
+  });
+
+  const out = {
+    last_updated: new Date().toISOString(),
+    source_url: SOURCE_URL,
+    entries: merged
+  };
+
+  writeJson(DATA_PATH, out);
+  console.log(`Wrote ${DATA_PATH} (entries: ${out.entries.length})`);
+
+  // Fail loudly if nothing extracted (helps you notice parser breakage)
+  if (scraped.length === 0) {
+    throw new Error(
+      "Extractor found 0 entries. The page structure may have changed; adjust extraction logic."
+    );
+  }
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
