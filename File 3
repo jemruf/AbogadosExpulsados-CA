@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Shitty Lawyers CA — Discipline (EN/ES)</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="wrap">
+      <h1>California Attorney Discipline (EN/ES)</h1>
+      <p class="sub">
+        Auto-updated weekly from the California State Bar discipline listings.
+      </p>
+
+      <div class="controls">
+        <input id="q" placeholder="Search name, bar #, county, or text…" />
+        <select id="bucket">
+          <option value="">All buckets</option>
+        </select>
+      </div>
+
+      <p id="meta" class="meta"></p>
+    </header>
+
+    <main class="wrap">
+      <div id="list" class="list"></div>
+      <div id="empty" class="empty hidden">No results.</div>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
