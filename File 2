@@ -3,7 +3,7 @@ import crypto from "crypto";
 import * as cheerio from "cheerio";
 
 const SOURCE_URL =
-  "https://www.calbar.ca.gov/legal-professionals/maintaining-compliance/administrative-compliance/attorney-discipline?page=1";
+  "https://www.calbar.ca.gov/legal-professionals/maintaining-compliance/administrative-compliance/attorney-discipline";
 
 const DATA_PATH = "site/data/entries.json";
 
