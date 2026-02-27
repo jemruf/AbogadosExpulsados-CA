@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Abogados Expulsados — CA (EN/ES)</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="wrap">
+      <h1>Abogados Expulsados — CA (EN/ES)</h1>
+      <p class="sub">Actualizado semanalmente.</p>
+
+      <div class="controls">
+        <input id="q" placeholder="Buscar por nombre, #, condado o texto…" />
+        <select id="bucket">
+          <option value="">Todos</option>
+        </select>
+      </div>
+
+      <p id="meta" class="meta"></p>
+    </header>
+
+    <main class="wrap">
+      <div id="list" class="list"></div>
+      <div id="empty" class="empty hidden">Sin resultados.</div>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
